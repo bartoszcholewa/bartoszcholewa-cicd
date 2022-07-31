@@ -1,0 +1,9 @@
+[masters]
+master-1 ansible_host=<MASTER-1_IP> ansible_user=root
+
+[workers]
+worker-1 ansible_host=<WORKER-1_IP> ansible_user=root
+worker-2 ansible_host=<WORKER-2_IP> ansible_user=root
+
+[databases]
+rds-1 ansible_host=<RDS-1_IP> ansible_user=root

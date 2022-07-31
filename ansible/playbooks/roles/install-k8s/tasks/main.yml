@@ -1,0 +1,210 @@
+- name: Check if this is the first deploy
+  stat:
+    path: /var/lib/bartoszcholewa/provisioned
+  register: provisioned
+
+- name: Update and upgrade apt packages
+  become: yes
+  apt:
+    upgrade: yes
+    update_cache: yes
+    cache_valid_time: 86400
+  tags:
+    - kubernetes
+
+- name: Update Server components
+  become: yes
+  apt:
+    name: vim
+    state: present
+  tags:
+    - kubernetes
+
+- name: Install Kubernetes from script
+  become: yes
+  script: autoinstall.sh
+  #  when: provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Get eth0 IP on MASTER
+  become: yes
+  shell: /sbin/ip -o -4 addr list eth0 | awk '{print $4}' | cut -d/ -f1
+  register: eth0_ip
+  when: >
+    inventory_hostname in groups['masters']
+    and provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Get ens10 IP on MASTER
+  become: yes
+  shell: /sbin/ip -o -4 addr list ens10 | awk '{print $4}' | cut -d/ -f1
+  register: ens10_ip
+  when: >
+    inventory_hostname in groups['masters']
+    and provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Initialise the CLuster
+  become: yes
+  shell: >
+    kubeadm init
+    --apiserver-advertise-address {{ eth0_ip.stdout }}
+    --apiserver-cert-extra-sans {{ ens10_ip.stdout }},{{ eth0_ip.stdout }}
+    --control-plane-endpoint {{ ens10_ip.stdout }}
+    --pod-network-cidr 10.244.0.0/16
+  when: >
+    inventory_hostname in groups['masters']
+    and provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Get JOIN command on MASTER for WORKERS
+  become: yes
+  shell: kubeadm token create --print-join-command
+  register: join_worker
+  when: >
+    inventory_hostname in groups['masters']
+    and provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Join WORKERS to MASTER cluster
+  become: yes
+  shell: "{{ hostvars['master-1']['join_worker'].stdout }}"
+  when: >
+    inventory_hostname in groups['workers']
+    and provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Setup kubeconfig for MASTER 1
+  become: yes
+  file:
+    path: /home/machinist/.kube
+    state: directory
+    mode: '0755'
+  when: >
+    inventory_hostname in groups['masters']
+    and provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Setup kubeconfig for MASTER 2
+  become: yes
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /home/machinist/.kube/config
+    owner: machinist
+    group: machinist
+    remote_src: yes
+  when: >
+    inventory_hostname in groups['masters']
+    and provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Install Flannel
+  become: yes
+  become_user: machinist
+  command: kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/v0.14.0/Documentation/kube-flannel.yml
+  when: >
+    inventory_hostname in groups['masters']
+    and provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Patch the flannel deployment to tolerate the uninitialized taint
+  become: yes
+  become_user: machinist
+  command: >
+    kubectl -n kube-system patch ds kube-flannel-ds --type json
+    -p '[{"op":"add","path":"/spec/template/spec/tolerations/-","value":{"key":"node.cloudprovider.kubernetes.io/uninitialized","value":"true","effect":"NoSchedule"}}]'
+  when: >
+    inventory_hostname in groups['masters']
+    and provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Install hcloud-cloud-controller-manager A
+  become: yes
+  become_user: machinist
+  command: >
+    kubectl -n kube-system create secret generic hcloud
+    --from-literal=token={{ hcloud_ccm_api_token }}
+    --from-literal=network={{ hcloud_network_id }}
+  when: >
+    inventory_hostname in groups['masters']
+    and provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Install hcloud-cloud-controller-manager A
+  become: yes
+  become_user: machinist
+  command: >
+    kubectl apply
+    -f https://github.com/hetznercloud/hcloud-cloud-controller-manager/releases/latest/download/ccm-networks.yaml
+  when: >
+    inventory_hostname in groups['masters']
+    and provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Install Container Storage Interface Driver CSI Driver A
+  become: yes
+  become_user: machinist
+  command: >
+    kubectl -n kube-system create secret generic hcloud-csi
+    --from-literal=token={{ hcloud_csid_api_token }}
+  when: >
+    inventory_hostname in groups['masters']
+    and provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Install Container Storage Interface Driver CSI Driver B
+  become: yes
+  become_user: machinist
+  command: >
+    kubectl apply
+    -f https://raw.githubusercontent.com/hetznercloud/csi-driver/v1.6.0/deploy/kubernetes/hcloud-csi.yml
+  when: >
+    inventory_hostname in groups['masters']
+    and provisioned.stat.exists == False
+  tags:
+    - kubernetes
+
+- name: Get nodes information
+  become: yes
+  become_user: machinist
+  shell: kubectl get nodes -o wide
+  register: nodes_result
+  when: >
+    inventory_hostname in groups['masters']
+  tags:
+    - kubernetes
+
+- name: Print return information from the previous task
+  become: yes
+  become_user: machinist
+  debug:
+    var: nodes_result.stdout_lines
+  when: >
+    inventory_hostname in groups['masters']
+  tags:
+    - kubernetes
+
+- name: Create bartoszcholewa state directory
+  file:
+    path: /var/lib/bartoszcholewa/
+    state: directory
+  become: yes
+
+- name: Mark first deploy as executed
+  file:
+    path: /var/lib/bartoszcholewa/provisioned
+    state: touch
+  become: yes

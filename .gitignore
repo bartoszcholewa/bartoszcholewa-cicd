@@ -127,3 +127,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+/.hetzner-config
+/.kube/
+/ansible/.fact_cache/
+/ansible/inventory/bartoszcholewa.pl

@@ -1,0 +1,166 @@
+---
+- name: Ensure ufw
+  apt:
+    name: ufw
+    state: present
+    update_cache: yes
+    cache_valid_time: 86400
+  become: yes
+
+- name: Ensure before.rules file for ufw
+  file: path=/etc/ufw/before.rules owner=root group=root mode=0644 state=touch
+  become: yes
+
+- name: Allow outbound ICPM traffic
+  lineinfile:
+    name: /etc/ufw/before.rules
+    insertbefore: COMMIT
+    line: "{{ item }}"
+  with_items:
+    - "# allow outbound icmp"
+    - "-A ufw-before-output -p icmp -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT"
+    - "-A ufw-before-output -p icmp -m state --state ESTABLISHED,RELATED -j ACCEPT"
+  become: yes
+
+- name: Restart UFW
+  systemd:
+    name: ufw
+    state: restarted
+  become: yes
+
+- name: Allow inbound traffic on management ports
+  ufw:
+    rule: allow
+    interface: "{{allowed_iface}}"
+    direction: in
+    proto: "{{ item.proto }}"
+    port: "{{ item.port }}"
+  with_items:
+    # Docker Swarm
+    # https://www.digitalocean.com/community/tutorials/how-to-configure-the-linux-firewall-for-docker-swarm-on-ubuntu-16-04
+    - { port: 2376, proto: tcp }
+    - { port: 2377, proto: tcp }
+    - { port: 3376, proto: tcp }
+    - { port: 4789, proto: udp }
+    - { port: 7946, proto: tcp }
+    - { port: 7946, proto: udp }
+    # Consul
+    # http://stackoverflow.com/a/30692226
+    - { port: 8300, proto: tcp }
+    - { port: 8301, proto: any }
+    - { port: 8400, proto: tcp }
+    - { port: 8500, proto: tcp }
+    - { port: 8600, proto: any }
+  become: yes
+
+- name: Allow outbound traffic on management ports
+  ufw:
+    rule: allow
+    interface: "{{allowed_iface}}"
+    direction: out
+    proto: "{{ item.proto }}"
+    port: "{{ item.port }}"
+  with_items:
+    # Docker Swarm
+    # https://www.digitalocean.com/community/tutorials/how-to-configure-the-linux-firewall-for-docker-swarm-on-ubuntu-16-04
+    - { port: 2376, proto: tcp }
+    - { port: 2377, proto: tcp }
+    - { port: 3376, proto: tcp }
+    - { port: 4789, proto: udp }
+    - { port: 7946, proto: tcp }
+    - { port: 7946, proto: udp }
+    # Consul
+    # http://stackoverflow.com/a/30692226
+    - { port: 8300, proto: tcp }
+    - { port: 8301, proto: any }
+    - { port: 8400, proto: tcp }
+    - { port: 8500, proto: tcp }
+    - { port: 8600, proto: any }
+  become: yes
+
+- name: Allow mosh traffic
+  ufw:
+    rule: allow
+    proto: "{{ item.proto }}"
+    port: "{{ item.port }}"
+  with_items:
+    # Mosh
+    - { port: 60001, proto: udp }
+  become: yes
+
+- name: Enable ESP
+  ufw:
+    rule: allow
+    direction: "{{ item }}"
+    interface: "{{allowed_iface}}"
+    proto: esp
+  with_items:
+    - in
+    - out
+  become: yes
+
+- name: Stop rpcbind service
+  service:
+    name: rpcbind
+    state: stopped
+    enabled: no
+  register: unused_disable
+  failed_when: "unused_disable is failed and ('find' not in unused_disable.msg and 'found' not in unused_disable.msg)"
+  become: yes
+
+- name: Remove rpcbind
+  apt:
+    name: rpcbind
+    force: yes
+    state: absent
+  become: yes
+
+- name: Install sshguard
+  apt:
+    name: "{{ item }}"
+    state: present
+    update_cache: yes
+    cache_valid_time: 86400
+  with_items:
+    - sshguard
+    - iptables
+    - rsyslog
+  become: yes
+  retries: 3
+
+- name: Disable ipv6 all
+  sysctl:
+    name: net.ipv6.conf.all.disable_ipv6
+    value: 1
+    sysctl_set: yes
+  become: yes
+
+- name: Disable ipv6 default
+  sysctl:
+    name: net.ipv6.conf.default.disable_ipv6
+    value: 1
+    sysctl_set: yes
+  become: yes
+
+- name: Activate sshguard
+  shell: iptables -A INPUT -p tcp --dport {{gandalf_ssh_port}} -j sshguard
+  become: yes
+
+- name: Change permission of sshd config
+  file:
+    path: /etc/ssh/sshd_config
+    mode: 0600
+  become: yes
+
+- name: Disable root SSH access
+  lineinfile: dest=/etc/ssh/sshd_config
+    regexp="{{item.re}}"
+    line="{{item.line}}"
+    state=present
+  # User set explicitely to ensure someone is able to login and elevate privileges
+  remote_user: machinist
+  become: yes
+  with_items:
+    - { re: "^PermitRootLogin", line: "PermitRootLogin no" }
+    - { re: "^PasswordAuthentication", line: "PasswordAuthentication no" }
+  notify: Reload sshd

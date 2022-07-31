@@ -1,0 +1,63 @@
+- name: Pretasks
+  hosts: all
+  gather_facts: True
+  pre_tasks:
+    - name: Verify Ansible meets version requirements.
+      assert:
+        that: "ansible_version.full is version('{{item}}', '>=')"
+        msg: >
+          "You must update Ansible to at least {{item}} to use this playbook."
+      with_items:
+        - 2.12
+  become: yes
+
+- name: Install essentials and create machinist user
+  hosts: all
+  become: yes
+  roles:
+    - role: initial
+      tags: [ "initial" ]
+
+- name: Harden all systems
+  hosts: all
+  remote_user: machinist
+  become: yes
+  vars:
+    ansible_user: machinist
+    security_sshd_enable_x11_forwarding: no
+  roles:
+    - role: ansible-hardening
+      tags: [ "ansible-hardening" ]
+
+- name: Gandalf Firewall
+  hosts: all
+  remote_user: machinist
+  become: yes
+  vars:
+    ansible_user: machinist
+  roles:
+    - role: gandalf
+      tags: [ "gandalf" ]
+      allowed_iface: "{{internal_iface}}"
+      gandalf_ssh_port: "{{ansible_port | default(22)}}"
+      gandalf_user_name: machinist
+
+- name: Install Kubernetes
+  hosts: "masters, workers"
+  remote_user: machinist
+  become: yes
+  vars:
+    ansible_user: machinist
+  vars_prompt:
+    - name: hcloud_ccm_api_token
+      prompt: Enter the Hetzner CloudControllerManager API TOKEN
+    - name: hcloud_network_id
+      prompt: Enter the Hetzner Network ID
+    - name: hcloud_csid_api_token
+      prompt: Enter the Hetzner CSIDriver API TOKEN
+  roles:
+    - role: install-k8s
+      tags: [ "kubernetes" ]
+
+
+

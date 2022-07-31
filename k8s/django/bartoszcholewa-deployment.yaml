@@ -1,0 +1,83 @@
+# k apply -f k8s/django/bartoszcholewa-deployment.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bartoszcholewa-config
+data:
+  DJANGO_ALLOWED_HOSTS: "*"
+  DJANGO_LOGLEVEL: "info"
+  DEBUG: "True"
+  DATABASE_ENGINE: "postgresql_psycopg2"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: bartoszcholewa
+  name: bartoszcholewa-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bartoszcholewa
+  template:
+    metadata:
+      labels:
+        app: bartoszcholewa
+    spec:
+      containers:
+        - name: bartoszcholewa
+          image: ghcr.io/bartoszcholewa/bartoszcholewa-backend:latest
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: bartoszcholewa-secrets
+            - configMapRef:
+                name: bartoszcholewa-config
+          ports:
+            - containerPort: 8000
+              name: gunicorn
+      imagePullSecrets:
+        - name: docker-hub
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bartoszcholewa
+  labels:
+    app: bartoszcholewa
+spec:
+  ports:
+    - port: 8000
+      protocol: TCP
+      targetPort: 8000
+  selector:
+    app: bartoszcholewa
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bartoszcholewa
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    kubernetes.io/tls-acme: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: bartoszcholewa.pl
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: bartoszcholewa
+                port:
+                  number: 8000
+  tls:
+    - hosts:
+        - bartoszcholewa.pl
+      secretName: tls-nginx-general
+...
