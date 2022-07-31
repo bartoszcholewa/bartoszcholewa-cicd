@@ -11,6 +11,7 @@
 5. Update deployment
 6. Wait rollout to finish
 7. Migrate database
+8. Collect static
 
 ***
 
